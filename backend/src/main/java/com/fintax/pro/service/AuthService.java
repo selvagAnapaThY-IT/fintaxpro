@@ -482,33 +482,36 @@ public class AuthService {
     @Transactional
     public Profile updateProfile(User user, ProfileDTO dto) {
         Profile profile = profileRepository.findByUser(user)
-                .orElseThrow(() -> new RuntimeException("Profile not found"));
+                .orElseGet(() -> {
+                    Profile newP = new Profile();
+                    newP.setUser(user);
+                    return newP;
+                });
 
-        // Strictly enforce read-only restriction for core identity fields after onboarding
-        boolean attemptedNameChange = dto.getName() != null && !dto.getName().trim().equalsIgnoreCase(user.getName());
-        boolean attemptedPanChange = dto.getPan() != null && !dto.getPan().trim().equalsIgnoreCase(profile.getPan());
-        boolean attemptedAadhaarChange = dto.getAadhaar() != null && !dto.getAadhaar().trim().equalsIgnoreCase(profile.getAadhaar());
-        boolean attemptedGstinChange = dto.getGstin() != null && !dto.getGstin().trim().equalsIgnoreCase(profile.getGstin());
-        boolean attemptedBusinessTypeChange = dto.getBusinessType() != null && !dto.getBusinessType().trim().equalsIgnoreCase(profile.getBusinessType());
-        boolean attemptedCityChange = dto.getCity() != null && !dto.getCity().trim().equalsIgnoreCase(profile.getCity());
-        boolean attemptedStateChange = dto.getState() != null && !dto.getState().trim().equalsIgnoreCase(profile.getState());
-
-        if (attemptedNameChange || attemptedPanChange || attemptedAadhaarChange || attemptedGstinChange || attemptedBusinessTypeChange || attemptedCityChange || attemptedStateChange) {
-            throw new RuntimeException("Personal identity information (Name, PAN, Aadhaar, GSTIN, Business Type, City, State) is permanently locked and cannot be modified after registration.");
+        if (dto.getName() != null && !dto.getName().trim().isEmpty()) {
+            user.setName(dto.getName().trim());
+            userRepository.save(user);
         }
 
-        // Direct updates to Email or Mobile without verification endpoint are strictly rejected
-        if (dto.getEmail() != null && !dto.getEmail().trim().equalsIgnoreCase(user.getEmail())) {
-            throw new RuntimeException("Email address cannot be modified directly. Please use the 'Edit Email' verification option.");
+        if (dto.getEmail() != null && !dto.getEmail().trim().isEmpty()) {
+            String newEmail = dto.getEmail().trim().toLowerCase();
+            if (!newEmail.equalsIgnoreCase(user.getEmail())) {
+                if (userRepository.existsByEmail(newEmail)) {
+                    throw new RuntimeException("Email " + newEmail + " is already registered with another account.");
+                }
+                user.setEmail(newEmail);
+                userRepository.save(user);
+            }
         }
 
-        if (dto.getMobile() != null && !dto.getMobile().trim().equalsIgnoreCase(profile.getMobile())) {
-            throw new RuntimeException("Mobile number cannot be modified directly. Please use the 'Edit Phone' verification option.");
-        }
-
-        if (dto.getFinancialYear() != null) {
-            profile.setFinancialYear(dto.getFinancialYear());
-        }
+        if (dto.getMobile() != null) profile.setMobile(dto.getMobile().trim());
+        if (dto.getBusinessType() != null) profile.setBusinessType(dto.getBusinessType().trim());
+        if (dto.getPan() != null) profile.setPan(dto.getPan().trim());
+        if (dto.getAadhaar() != null) profile.setAadhaar(dto.getAadhaar().trim());
+        if (dto.getGstin() != null) profile.setGstin(dto.getGstin().trim());
+        if (dto.getCity() != null) profile.setCity(dto.getCity().trim());
+        if (dto.getState() != null) profile.setState(dto.getState().trim());
+        if (dto.getFinancialYear() != null) profile.setFinancialYear(dto.getFinancialYear().trim());
 
         return profileRepository.save(profile);
     }

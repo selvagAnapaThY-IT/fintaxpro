@@ -191,6 +191,13 @@ export const useStore = create((set, get) => ({
     try {
       await updateProfileApi(profileData);
       const meRes = await api.get('/users/me');
+      const currentAuth = JSON.parse(localStorage.getItem('fintax_auth') || '{}');
+      const updatedAuth = {
+        ...currentAuth,
+        user: meRes.data.user,
+        profile: meRes.data.profile,
+      };
+      localStorage.setItem('fintax_auth', JSON.stringify(updatedAuth));
       set({
         user: meRes.data.user,
         profile: meRes.data.profile,
