@@ -11,7 +11,7 @@ FROM maven:3.9.6-eclipse-temurin-17 AS backend-build
 WORKDIR /app
 COPY backend/pom.xml ./backend/
 COPY backend/src ./backend/src
-COPY --from=frontend-build /app/frontend/dist ./backend/src/main/resources/static
+COPY --from=frontend-build /app/frontend/dist/ ./backend/src/main/resources/static/
 RUN cd backend && mvn clean package -DskipTests
 
 # Stage 3: Final Runtime Container
