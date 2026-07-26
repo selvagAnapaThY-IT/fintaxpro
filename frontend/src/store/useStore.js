@@ -97,7 +97,9 @@ export const useStore = create((set, get) => ({
       set({ loading: false });
       return { success: true, message: res.data.message, demoOtp: res.data.demoOtp };
     } catch (err) {
-      const errMsg = err.response?.data?.message || 'Failed to request signup verification code.';
+      const errMsg = typeof err.response?.data === 'string'
+        ? err.response.data
+        : err.response?.data?.message || err.response?.data?.error || 'Failed to request signup verification code.';
       set({ error: errMsg, loading: false });
       return { success: false, error: errMsg };
     }
