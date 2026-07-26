@@ -39,7 +39,7 @@ public class EmailService {
                 "Signup Verification Code",
                 "This code will expire in 10 minutes. If you did not request this code, please ignore this email."
         );
-        sendEmail(recipientEmail, subject, htmlContent, otp, "SIGNUP_VERIFICATION");
+        java.util.concurrent.CompletableFuture.runAsync(() -> sendEmail(recipientEmail, subject, htmlContent, otp, "SIGNUP_VERIFICATION"));
     }
 
     public void sendEmailChangeOtp(String recipientEmail, String otp) {
@@ -51,7 +51,7 @@ public class EmailService {
                 "Email Change Code",
                 "This code expires in 10 minutes. If you did not initiate this change, please contact support immediately and secure your account."
         );
-        sendEmail(recipientEmail, subject, htmlContent, otp, "EMAIL_CHANGE_VERIFICATION");
+        java.util.concurrent.CompletableFuture.runAsync(() -> sendEmail(recipientEmail, subject, htmlContent, otp, "EMAIL_CHANGE_VERIFICATION"));
     }
 
     public void sendPasswordChangeOtp(String recipientEmail, String otp) {
@@ -63,7 +63,7 @@ public class EmailService {
                 "Password Change Code",
                 "This code expires in 10 minutes. NEVER share this OTP with anyone, including FinTax Pro staff."
         );
-        sendEmail(recipientEmail, subject, htmlContent, otp, "PASSWORD_CHANGE_VERIFICATION");
+        java.util.concurrent.CompletableFuture.runAsync(() -> sendEmail(recipientEmail, subject, htmlContent, otp, "PASSWORD_CHANGE_VERIFICATION"));
     }
 
     public void sendPhoneChangeOtp(String recipientEmail, String otp) {
@@ -75,7 +75,7 @@ public class EmailService {
                 "Phone Change Code",
                 "This code expires in 10 minutes. If you did not request this update, please change your password immediately."
         );
-        sendEmail(recipientEmail, subject, htmlContent, otp, "PHONE_CHANGE_VERIFICATION");
+        java.util.concurrent.CompletableFuture.runAsync(() -> sendEmail(recipientEmail, subject, htmlContent, otp, "PHONE_CHANGE_VERIFICATION"));
     }
 
     private void sendEmail(String to, String subject, String htmlContent, String otp, String actionType) {
