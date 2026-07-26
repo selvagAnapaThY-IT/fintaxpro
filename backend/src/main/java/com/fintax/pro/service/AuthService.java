@@ -174,23 +174,24 @@ public class AuthService {
         String cleanEmail = request.getEmail().trim().toLowerCase();
 
         // Rate Limiting Cooldown Check (60 seconds)
-        verificationCodeRepository.findTopByEmailAndTypeAndUsedFalseAndExpiresAtAfterOrderByCreatedAtDesc(cleanEmail, VerificationType.SIGNUP, LocalDateTime.now())
+        verificationCodeRepository.findTopByEmailAndTypeOrderByCreatedAtDesc(cleanEmail, VerificationType.SIGNUP)
                 .ifPresent(existingCode -> {
                     if (existingCode.getCreatedAt().plusSeconds(60).isAfter(LocalDateTime.now())) {
                         throw new RuntimeException("Please wait 60 seconds before requesting a new verification code.");
                     }
                 });
 
-        // Re-use request data from existing unverified registration if present
+        // Find most recent signup session payload for this email
         VerificationCode lastCode = verificationCodeRepository
-                .findTopByEmailAndTypeAndUsedFalseAndExpiresAtAfterOrderByCreatedAtDesc(cleanEmail, VerificationType.SIGNUP, LocalDateTime.now())
-                .orElse(null);
+                .findTopByEmailAndTypeOrderByCreatedAtDesc(cleanEmail, VerificationType.SIGNUP)
+                .orElseThrow(() -> new RuntimeException("No signup session found for " + cleanEmail + ". Please go back and re-enter your details."));
 
-        if (lastCode == null || lastCode.getPayload() == null) {
-            throw new RuntimeException("No active signup session found for this email. Please restart signup.");
+        if (lastCode.getPayload() == null || lastCode.getPayload().trim().isEmpty()) {
+            throw new RuntimeException("Signup session data expired. Please restart signup.");
         }
 
-        return requestSignupOtp(deserializeRegisterRequest(lastCode.getPayload()));
+        RegisterRequest registerRequest = deserializeRegisterRequest(lastCode.getPayload());
+        return requestSignupOtp(registerRequest);
     }
 
     private RegisterRequest deserializeRegisterRequest(String json) {

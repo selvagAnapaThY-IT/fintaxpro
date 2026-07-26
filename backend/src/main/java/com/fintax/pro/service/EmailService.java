@@ -79,10 +79,10 @@ public class EmailService {
     }
 
     private void sendEmail(String to, String subject, String htmlContent, String otp, String actionType) {
-        logger.info("[EMAIL SERVICE] [{}] Sending OTP code to: {} | OTP: {}", actionType, to, otp);
+        logger.info("[EMAIL SERVICE] [{}] Target: {} | OTP Code: {}", actionType, to, otp);
 
         if (mailHost == null || mailHost.trim().isEmpty() || "localhost".equalsIgnoreCase(mailHost.trim())) {
-            logger.warn("[EMAIL SERVICE] SMTP host not configured. Email logged to console instead of sending live SMTP.");
+            logger.warn("[EMAIL SERVICE] SMTP host is not configured (EMAIL_HOST is empty). Code logged to console: OTP={}", otp);
             return;
         }
 
@@ -90,17 +90,16 @@ public class EmailService {
             MimeMessage message = mailSender.createMimeMessage();
             MimeMessageHelper helper = new MimeMessageHelper(message, true, "UTF-8");
             
-            String sender = (fromEmail != null && !fromEmail.trim().isEmpty()) ? fromEmail : "no-reply@fintaxpro.in";
+            String sender = (fromEmail != null && !fromEmail.trim().isEmpty()) ? fromEmail.trim() : "no-reply@fintaxpro.in";
             helper.setFrom(sender, "FinTax Pro");
-            helper.setTo(to);
+            helper.setTo(to.trim());
             helper.setSubject(subject);
             helper.setText(htmlContent, true);
 
             mailSender.send(message);
-            logger.info("[EMAIL SERVICE] Live email successfully dispatched to {}", to);
+            logger.info("[EMAIL SERVICE] Live SMTP email successfully sent to {}", to);
         } catch (Exception e) {
-            logger.error("[EMAIL SERVICE] Failed to send email via SMTP to {}: {}", to, e.getMessage());
-            // Safe fallback: Log code so local test / demo environment never fails
+            logger.error("[EMAIL SERVICE] Failed to dispatch live SMTP email to {}: {}", to, e.getMessage(), e);
         }
     }
 

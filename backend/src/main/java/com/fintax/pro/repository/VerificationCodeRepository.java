@@ -16,6 +16,10 @@ public interface VerificationCodeRepository extends JpaRepository<VerificationCo
             String email, VerificationType type, LocalDateTime now
     );
 
+    Optional<VerificationCode> findTopByEmailAndTypeOrderByCreatedAtDesc(
+            String email, VerificationType type
+    );
+
     List<VerificationCode> findByEmailAndTypeAndUsedFalse(String email, VerificationType type);
 
     List<VerificationCode> findByUserIdAndTypeAndUsedFalse(Long userId, VerificationType type);
