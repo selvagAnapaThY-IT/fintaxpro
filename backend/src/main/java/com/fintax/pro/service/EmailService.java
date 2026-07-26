@@ -26,6 +26,10 @@ public class EmailService {
         this.mailSender = mailSender;
     }
 
+    public boolean isLiveEmailConfigured() {
+        return mailHost != null && !mailHost.trim().isEmpty() && !"localhost".equalsIgnoreCase(mailHost.trim());
+    }
+
     public void sendSignupOtp(String recipientEmail, String otp) {
         String subject = "Verify Your Email - FinTax Pro";
         String htmlContent = buildHtmlTemplate(

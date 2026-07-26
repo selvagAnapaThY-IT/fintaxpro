@@ -26,10 +26,10 @@ public class User {
     @Column(name = "reset_otp_expiry")
     private LocalDateTime resetOtpExpiry;
 
-    @Column(name = "email_verified", nullable = false)
+    @Column(name = "email_verified", nullable = false, columnDefinition = "boolean default true")
     private boolean emailVerified = true;
 
-    @Column(name = "token_version", nullable = false)
+    @Column(name = "token_version", nullable = false, columnDefinition = "integer default 0")
     private int tokenVersion = 0;
 
     @Column(name = "created_at", nullable = false)
