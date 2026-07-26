@@ -26,6 +26,12 @@ public class User {
     @Column(name = "reset_otp_expiry")
     private LocalDateTime resetOtpExpiry;
 
+    @Column(name = "email_verified", nullable = false)
+    private boolean emailVerified = true;
+
+    @Column(name = "token_version", nullable = false)
+    private int tokenVersion = 0;
+
     @Column(name = "created_at", nullable = false)
     private LocalDateTime createdAt;
 
@@ -73,6 +79,12 @@ public class User {
     public LocalDateTime getResetOtpExpiry() { return resetOtpExpiry; }
     public void setResetOtpExpiry(LocalDateTime resetOtpExpiry) { this.resetOtpExpiry = resetOtpExpiry; }
 
+    public boolean isEmailVerified() { return emailVerified; }
+    public void setEmailVerified(boolean emailVerified) { this.emailVerified = emailVerified; }
+
+    public int getTokenVersion() { return tokenVersion; }
+    public void setTokenVersion(int tokenVersion) { this.tokenVersion = tokenVersion; }
+
     public LocalDateTime getCreatedAt() { return createdAt; }
     public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }
 
@@ -88,6 +100,8 @@ public class User {
         private String password;
         private String resetOtp;
         private LocalDateTime resetOtpExpiry;
+        private boolean emailVerified = true;
+        private int tokenVersion = 0;
         private LocalDateTime createdAt;
 
         public UserBuilder id(Long id) { this.id = id; return this; }
@@ -96,10 +110,15 @@ public class User {
         public UserBuilder password(String password) { this.password = password; return this; }
         public UserBuilder resetOtp(String resetOtp) { this.resetOtp = resetOtp; return this; }
         public UserBuilder resetOtpExpiry(LocalDateTime resetOtpExpiry) { this.resetOtpExpiry = resetOtpExpiry; return this; }
+        public UserBuilder emailVerified(boolean emailVerified) { this.emailVerified = emailVerified; return this; }
+        public UserBuilder tokenVersion(int tokenVersion) { this.tokenVersion = tokenVersion; return this; }
         public UserBuilder createdAt(LocalDateTime createdAt) { this.createdAt = createdAt; return this; }
 
         public User build() {
-            return new User(id, name, email, password, resetOtp, resetOtpExpiry, createdAt);
+            User u = new User(id, name, email, password, resetOtp, resetOtpExpiry, createdAt);
+            u.setEmailVerified(emailVerified);
+            u.setTokenVersion(tokenVersion);
+            return u;
         }
     }
 }

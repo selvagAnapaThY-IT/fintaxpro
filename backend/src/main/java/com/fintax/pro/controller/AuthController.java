@@ -1,8 +1,6 @@
 package com.fintax.pro.controller;
 
-import com.fintax.pro.dto.AuthResponse;
-import com.fintax.pro.dto.LoginRequest;
-import com.fintax.pro.dto.RegisterRequest;
+import com.fintax.pro.dto.*;
 import com.fintax.pro.service.AuthService;
 import jakarta.validation.Valid;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -16,6 +14,25 @@ public class AuthController {
     @Autowired
     private AuthService authService;
 
+    @PostMapping("/signup/request")
+    public ResponseEntity<MessageResponse> requestSignupOtp(@Valid @RequestBody RegisterRequest request) {
+        MessageResponse response = authService.requestSignupOtp(request);
+        return ResponseEntity.ok(response);
+    }
+
+    @PostMapping("/signup/verify")
+    public ResponseEntity<AuthResponse> verifySignupOtp(@Valid @RequestBody VerifyOtpRequest request) {
+        AuthResponse response = authService.verifySignupOtp(request);
+        return ResponseEntity.ok(response);
+    }
+
+    @PostMapping("/signup/resend")
+    public ResponseEntity<MessageResponse> resendSignupOtp(@Valid @RequestBody ResendOtpRequest request) {
+        MessageResponse response = authService.resendSignupOtp(request);
+        return ResponseEntity.ok(response);
+    }
+
+    // Legacy register endpoint (Direct)
     @PostMapping("/register")
     public ResponseEntity<AuthResponse> register(@Valid @RequestBody RegisterRequest request) {
         AuthResponse response = authService.register(request);
@@ -29,14 +46,14 @@ public class AuthController {
     }
 
     @PostMapping("/forgot-password")
-    public ResponseEntity<com.fintax.pro.dto.MessageResponse> forgotPassword(@Valid @RequestBody com.fintax.pro.dto.ForgotPasswordRequest request) {
-        com.fintax.pro.dto.MessageResponse response = authService.forgotPassword(request);
+    public ResponseEntity<MessageResponse> forgotPassword(@Valid @RequestBody ForgotPasswordRequest request) {
+        MessageResponse response = authService.forgotPassword(request);
         return ResponseEntity.ok(response);
     }
 
     @PostMapping("/reset-password")
-    public ResponseEntity<com.fintax.pro.dto.MessageResponse> resetPassword(@Valid @RequestBody com.fintax.pro.dto.ResetPasswordRequest request) {
-        com.fintax.pro.dto.MessageResponse response = authService.resetPassword(request);
+    public ResponseEntity<MessageResponse> resetPassword(@Valid @RequestBody ResetPasswordRequest request) {
+        MessageResponse response = authService.resetPassword(request);
         return ResponseEntity.ok(response);
     }
 }

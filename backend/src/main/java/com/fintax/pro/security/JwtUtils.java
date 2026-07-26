@@ -52,8 +52,23 @@ public class JwtUtils {
     }
 
     public String generateToken(UserDetails userDetails) {
+        return generateToken(userDetails, 0);
+    }
+
+    public String generateToken(UserDetails userDetails, int tokenVersion) {
         Map<String, Object> claims = new HashMap<>();
+        claims.put("tv", tokenVersion);
         return doGenerateToken(claims, userDetails.getUsername());
+    }
+
+    public Integer getTokenVersionFromToken(String token) {
+        try {
+            final Claims claims = getAllClaimsFromToken(token);
+            Object tv = claims.get("tv");
+            return tv != null ? Integer.parseInt(tv.toString()) : 0;
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     private String doGenerateToken(Map<String, Object> claims, String subject) {
@@ -67,9 +82,15 @@ public class JwtUtils {
     }
 
     public Boolean validateToken(String token, UserDetails userDetails) {
+        return validateToken(token, userDetails, 0);
+    }
+
+    public Boolean validateToken(String token, UserDetails userDetails, int currentTokenVersion) {
         try {
             final String username = getUsernameFromToken(token);
-            return (username.equals(userDetails.getUsername()) && !isTokenExpired(token));
+            Integer tokenTv = getTokenVersionFromToken(token);
+            boolean versionValid = (tokenTv == null || tokenTv == currentTokenVersion);
+            return (username.equals(userDetails.getUsername()) && !isTokenExpired(token) && versionValid);
         } catch (JwtException | IllegalArgumentException e) {
             return false;
         }

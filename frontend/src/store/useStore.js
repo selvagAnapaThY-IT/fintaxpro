@@ -1,5 +1,16 @@
 import { create } from 'zustand';
-import api from '../services/api';
+import api, {
+  requestSignupOtpApi,
+  verifySignupOtpApi,
+  resendSignupOtpApi,
+  requestEmailChangeApi,
+  verifyEmailChangeApi,
+  requestPasswordChangeApi,
+  verifyPasswordChangeApi,
+  requestPhoneChangeApi,
+  verifyPhoneChangeApi,
+  updateProfileApi
+} from '../services/api';
 
 const getInitialAuth = () => {
   const authData = localStorage.getItem('fintax_auth');
@@ -78,6 +89,53 @@ export const useStore = create((set, get) => ({
     }
   },
 
+  // Signup Verification API Flow
+  requestSignupOtp: async (formData) => {
+    set({ loading: true, error: null });
+    try {
+      const res = await requestSignupOtpApi(formData);
+      set({ loading: false });
+      return { success: true, message: res.data.message, demoOtp: res.data.demoOtp };
+    } catch (err) {
+      const errMsg = err.response?.data?.message || 'Failed to request signup verification code.';
+      set({ error: errMsg, loading: false });
+      return { success: false, error: errMsg };
+    }
+  },
+
+  verifySignupOtp: async (email, otp) => {
+    set({ loading: true, error: null });
+    try {
+      const res = await verifySignupOtpApi({ email, otp, type: 'SIGNUP' });
+      const authData = {
+        user: res.data.user,
+        profile: res.data.profile,
+        token: res.data.token,
+        isAuthenticated: true,
+      };
+      localStorage.setItem('fintax_auth', JSON.stringify(authData));
+      set({ ...authData, loading: false });
+      return { success: true };
+    } catch (err) {
+      const errMsg = err.response?.data?.message || 'Invalid or expired verification code.';
+      set({ error: errMsg, loading: false });
+      return { success: false, error: errMsg };
+    }
+  },
+
+  resendSignupOtp: async (email) => {
+    set({ loading: true, error: null });
+    try {
+      const res = await resendSignupOtpApi({ email, type: 'SIGNUP' });
+      set({ loading: false });
+      return { success: true, message: res.data.message, demoOtp: res.data.demoOtp };
+    } catch (err) {
+      const errMsg = err.response?.data?.message || 'Failed to resend verification code.';
+      set({ error: errMsg, loading: false });
+      return { success: false, error: errMsg };
+    }
+  },
+
   register: async (formData) => {
     set({ loading: true, error: null });
     try {
@@ -129,7 +187,7 @@ export const useStore = create((set, get) => ({
   updateProfile: async (profileData) => {
     set({ loading: true, error: null });
     try {
-      await api.put('/users/profile', profileData);
+      await updateProfileApi(profileData);
       const meRes = await api.get('/users/me');
       set({
         user: meRes.data.user,
@@ -141,6 +199,97 @@ export const useStore = create((set, get) => ({
       const errMsg = typeof err.response?.data === 'string'
         ? err.response.data
         : err.response?.data?.message || err.response?.data?.error || 'Failed to update profile settings.';
+      set({ error: errMsg, loading: false });
+      return { success: false, error: errMsg };
+    }
+  },
+
+  // Profile Change Verification Actions
+  requestEmailChange: async (newEmail) => {
+    set({ loading: true, error: null });
+    try {
+      const res = await requestEmailChangeApi({ newEmail });
+      set({ loading: false });
+      return { success: true, message: res.data.message, demoOtp: res.data.demoOtp };
+    } catch (err) {
+      const errMsg = err.response?.data?.message || 'Failed to request email change verification.';
+      set({ error: errMsg, loading: false });
+      return { success: false, error: errMsg };
+    }
+  },
+
+  verifyEmailChange: async (email, otp) => {
+    set({ loading: true, error: null });
+    try {
+      const res = await verifyEmailChangeApi({ email, otp, type: 'EMAIL_CHANGE' });
+      const authData = {
+        user: res.data.user,
+        profile: res.data.profile,
+        token: res.data.token,
+        isAuthenticated: true,
+      };
+      localStorage.setItem('fintax_auth', JSON.stringify(authData));
+      set({ ...authData, loading: false });
+      return { success: true };
+    } catch (err) {
+      const errMsg = err.response?.data?.message || 'Invalid or expired email verification code.';
+      set({ error: errMsg, loading: false });
+      return { success: false, error: errMsg };
+    }
+  },
+
+  requestPasswordChange: async (currentPassword, newPassword, confirmPassword) => {
+    set({ loading: true, error: null });
+    try {
+      const res = await requestPasswordChangeApi({ currentPassword, newPassword, confirmPassword });
+      set({ loading: false });
+      return { success: true, message: res.data.message, demoOtp: res.data.demoOtp };
+    } catch (err) {
+      const errMsg = err.response?.data?.message || 'Failed to request password change verification.';
+      set({ error: errMsg, loading: false });
+      return { success: false, error: errMsg };
+    }
+  },
+
+  verifyPasswordChange: async (email, otp) => {
+    set({ loading: true, error: null });
+    try {
+      const res = await verifyPasswordChangeApi({ email, otp, type: 'PASSWORD_CHANGE' });
+      set({ loading: false });
+      return { success: true, message: res.data.message };
+    } catch (err) {
+      const errMsg = err.response?.data?.message || 'Invalid or expired password verification code.';
+      set({ error: errMsg, loading: false });
+      return { success: false, error: errMsg };
+    }
+  },
+
+  requestPhoneChange: async (newPhone) => {
+    set({ loading: true, error: null });
+    try {
+      const res = await requestPhoneChangeApi({ newPhone });
+      set({ loading: false });
+      return { success: true, message: res.data.message, demoOtp: res.data.demoOtp };
+    } catch (err) {
+      const errMsg = err.response?.data?.message || 'Failed to request phone change verification.';
+      set({ error: errMsg, loading: false });
+      return { success: false, error: errMsg };
+    }
+  },
+
+  verifyPhoneChange: async (email, otp) => {
+    set({ loading: true, error: null });
+    try {
+      const res = await verifyPhoneChangeApi({ email, otp, type: 'PHONE_CHANGE' });
+      const meRes = await api.get('/users/me');
+      set({
+        user: meRes.data.user,
+        profile: meRes.data.profile,
+        loading: false,
+      });
+      return { success: true };
+    } catch (err) {
+      const errMsg = err.response?.data?.message || 'Invalid or expired phone verification code.';
       set({ error: errMsg, loading: false });
       return { success: false, error: errMsg };
     }

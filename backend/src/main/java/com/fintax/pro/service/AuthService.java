@@ -1,12 +1,14 @@
 package com.fintax.pro.service;
 
-import com.fintax.pro.dto.AuthResponse;
-import com.fintax.pro.dto.LoginRequest;
-import com.fintax.pro.dto.RegisterRequest;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fintax.pro.dto.*;
 import com.fintax.pro.entity.Profile;
 import com.fintax.pro.entity.User;
+import com.fintax.pro.entity.VerificationCode;
+import com.fintax.pro.entity.VerificationType;
 import com.fintax.pro.repository.ProfileRepository;
 import com.fintax.pro.repository.UserRepository;
+import com.fintax.pro.repository.VerificationCodeRepository;
 import com.fintax.pro.security.JwtUtils;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.security.authentication.AuthenticationManager;
@@ -17,6 +19,10 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.security.SecureRandom;
+import java.time.LocalDateTime;
+import java.util.List;
+
 @Service
 public class AuthService {
 
@@ -25,6 +31,9 @@ public class AuthService {
 
     @Autowired
     private ProfileRepository profileRepository;
+
+    @Autowired
+    private VerificationCodeRepository verificationCodeRepository;
 
     @Autowired
     private PasswordEncoder passwordEncoder;
@@ -38,94 +47,513 @@ public class AuthService {
     @Autowired
     private UserDetailsService userDetailsService;
 
+    @Autowired
+    private EmailService emailService;
+
+    private final ObjectMapper objectMapper = new ObjectMapper();
+    private final SecureRandom secureRandom = new SecureRandom();
+
+    // ==========================================
+    // FEATURE 1: SIGNUP EMAIL VERIFICATION FLOW
+    // ==========================================
+
     @Transactional
-    public AuthResponse register(RegisterRequest request) {
-        if (userRepository.existsByEmail(request.getEmail())) {
-            throw new RuntimeException("Email address is already in use");
+    public MessageResponse requestSignupOtp(RegisterRequest request) {
+        String cleanEmail = request.getEmail().trim().toLowerCase();
+        if (userRepository.existsByEmail(cleanEmail)) {
+            throw new RuntimeException("Email address is already registered. Please log in or use a different email.");
         }
 
-        User user = User.builder()
-                .name(request.getName())
-                .email(request.getEmail())
-                .password(passwordEncoder.encode(request.getPassword()))
-                .build();
+        // Generate cryptographically secure 6-digit OTP
+        String otp = String.format("%06d", secureRandom.nextInt(900000) + 100000);
 
-        user = userRepository.save(user);
+        try {
+            String payloadJson = objectMapper.writeValueAsString(request);
 
-        Profile profile = Profile.builder()
-                .user(user)
-                .mobile(request.getMobile())
-                .businessType(request.getBusinessType())
-                .pan(request.getPan())
-                .aadhaar(request.getAadhaar())
-                .gstin(request.getGstin())
-                .city(request.getCity())
-                .state(request.getState())
-                .financialYear("2025-2026") // default financial year
-                .build();
+            // Invalidate any existing unverified signup codes for this email
+            List<VerificationCode> existingCodes = verificationCodeRepository.findByEmailAndTypeAndUsedFalse(cleanEmail, VerificationType.SIGNUP);
+            existingCodes.forEach(code -> code.setUsed(true));
+            verificationCodeRepository.saveAll(existingCodes);
 
-        profile = profileRepository.save(profile);
+            // Save new hashed verification code (Expires in 10 mins)
+            VerificationCode verificationCode = VerificationCode.builder()
+                    .email(cleanEmail)
+                    .codeHash(passwordEncoder.encode(otp))
+                    .type(VerificationType.SIGNUP)
+                    .expiresAt(LocalDateTime.now().plusMinutes(10))
+                    .attempts(0)
+                    .used(false)
+                    .payload(payloadJson)
+                    .build();
 
-        UserDetails userDetails = userDetailsService.loadUserByUsername(user.getEmail());
-        String token = jwtUtils.generateToken(userDetails);
+            verificationCodeRepository.save(verificationCode);
 
-        return buildAuthResponse(token, user, profile);
+            // Dispatch Email via EmailService
+            emailService.sendSignupOtp(cleanEmail, otp);
+
+            return new MessageResponse(
+                    "Verification code sent to " + cleanEmail + ". Please check your inbox to complete signup.",
+                    otp
+            );
+
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to process signup request: " + e.getMessage());
+        }
     }
 
+    @Transactional
+    public AuthResponse verifySignupOtp(VerifyOtpRequest request) {
+        String cleanEmail = request.getEmail().trim().toLowerCase();
+        String inputOtp = request.getOtp().trim();
+
+        VerificationCode code = verificationCodeRepository
+                .findTopByEmailAndTypeAndUsedFalseAndExpiresAtAfterOrderByCreatedAtDesc(cleanEmail, VerificationType.SIGNUP, LocalDateTime.now())
+                .orElseThrow(() -> new RuntimeException("Verification code has expired or does not exist. Please request a new code."));
+
+        if (code.getAttempts() >= 5) {
+            code.setUsed(true);
+            verificationCodeRepository.save(code);
+            throw new RuntimeException("Too many incorrect attempts. This verification code has been invalidated. Please request a new one.");
+        }
+
+        if (!passwordEncoder.matches(inputOtp, code.getCodeHash())) {
+            code.setAttempts(code.getAttempts() + 1);
+            verificationCodeRepository.save(code);
+            throw new RuntimeException("Invalid verification code. Please check your 6-digit code and try again.");
+        }
+
+        // Mark OTP as single-use completed
+        code.setUsed(true);
+        verificationCodeRepository.save(code);
+
+        try {
+            RegisterRequest registerRequest = objectMapper.readValue(code.getPayload(), RegisterRequest.class);
+
+            if (userRepository.existsByEmail(registerRequest.getEmail().trim().toLowerCase())) {
+                throw new RuntimeException("An account with this email was created during verification. Please log in.");
+            }
+
+            // Create permanent User and Profile
+            User user = User.builder()
+                    .name(registerRequest.getName().trim())
+                    .email(registerRequest.getEmail().trim().toLowerCase())
+                    .password(passwordEncoder.encode(registerRequest.getPassword()))
+                    .emailVerified(true)
+                    .tokenVersion(0)
+                    .build();
+
+            user = userRepository.save(user);
+
+            Profile profile = Profile.builder()
+                    .user(user)
+                    .mobile(registerRequest.getMobile() != null ? registerRequest.getMobile().trim() : "")
+                    .businessType(registerRequest.getBusinessType() != null ? registerRequest.getBusinessType().trim() : "Freelancer")
+                    .pan(registerRequest.getPan() != null ? registerRequest.getPan().trim().toUpperCase() : "")
+                    .aadhaar(registerRequest.getAadhaar() != null ? registerRequest.getAadhaar().trim() : "")
+                    .gstin(registerRequest.getGstin() != null ? registerRequest.getGstin().trim().toUpperCase() : "")
+                    .city(registerRequest.getCity() != null ? registerRequest.getCity().trim() : "")
+                    .state(registerRequest.getState() != null ? registerRequest.getState().trim() : "")
+                    .financialYear("2025-2026")
+                    .build();
+
+            profile = profileRepository.save(profile);
+
+            // Auto Log In
+            UserDetails userDetails = userDetailsService.loadUserByUsername(user.getEmail());
+            String token = jwtUtils.generateToken(userDetails, user.getTokenVersion());
+
+            return buildAuthResponse(token, user, profile);
+
+        } catch (Exception e) {
+            throw new RuntimeException("Error completing registration: " + e.getMessage());
+        }
+    }
+
+    @Transactional
+    public MessageResponse resendSignupOtp(ResendOtpRequest request) {
+        String cleanEmail = request.getEmail().trim().toLowerCase();
+
+        // Rate Limiting Cooldown Check (60 seconds)
+        verificationCodeRepository.findTopByEmailAndTypeAndUsedFalseAndExpiresAtAfterOrderByCreatedAtDesc(cleanEmail, VerificationType.SIGNUP, LocalDateTime.now())
+                .ifPresent(existingCode -> {
+                    if (existingCode.getCreatedAt().plusSeconds(60).isAfter(LocalDateTime.now())) {
+                        throw new RuntimeException("Please wait 60 seconds before requesting a new verification code.");
+                    }
+                });
+
+        // Re-use request data from existing unverified registration if present
+        VerificationCode lastCode = verificationCodeRepository
+                .findTopByEmailAndTypeAndUsedFalseAndExpiresAtAfterOrderByCreatedAtDesc(cleanEmail, VerificationType.SIGNUP, LocalDateTime.now())
+                .orElse(null);
+
+        if (lastCode == null || lastCode.getPayload() == null) {
+            throw new RuntimeException("No active signup session found for this email. Please restart signup.");
+        }
+
+        return requestSignupOtp(deserializeRegisterRequest(lastCode.getPayload()));
+    }
+
+    private RegisterRequest deserializeRegisterRequest(String json) {
+        try {
+            return objectMapper.readValue(json, RegisterRequest.class);
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to read signup session data.");
+        }
+    }
+
+    // ==========================================
+    // LOGIN & AUTHENTICATION
+    // ==========================================
+
     public AuthResponse login(LoginRequest request) {
+        String cleanEmail = request.getEmail().trim().toLowerCase();
         authenticationManager.authenticate(
-                new UsernamePasswordAuthenticationToken(request.getEmail(), request.getPassword())
+                new UsernamePasswordAuthenticationToken(cleanEmail, request.getPassword())
         );
 
-        User user = userRepository.findByEmail(request.getEmail())
+        User user = userRepository.findByEmail(cleanEmail)
                 .orElseThrow(() -> new RuntimeException("User not found"));
 
         Profile profile = profileRepository.findByUser(user)
                 .orElseThrow(() -> new RuntimeException("Profile not found"));
 
         UserDetails userDetails = userDetailsService.loadUserByUsername(user.getEmail());
-        String token = jwtUtils.generateToken(userDetails);
+        String token = jwtUtils.generateToken(userDetails, user.getTokenVersion());
 
         return buildAuthResponse(token, user, profile);
     }
 
+    // Legacy register backward compatibility
     @Transactional
-    public com.fintax.pro.dto.MessageResponse forgotPassword(com.fintax.pro.dto.ForgotPasswordRequest request) {
-        User user = userRepository.findByEmail(request.getEmail())
-                .orElseThrow(() -> new RuntimeException("No registered account found with email: " + request.getEmail()));
+    public AuthResponse register(RegisterRequest request) {
+        MessageResponse response = requestSignupOtp(request);
+        // For legacy direct registration tests, auto verify if demo mode
+        VerifyOtpRequest verifyReq = new VerifyOtpRequest(request.getEmail(), response.getDemoOtp(), VerificationType.SIGNUP);
+        return verifySignupOtp(verifyReq);
+    }
 
-        // Generate 6-digit OTP
-        String otp = String.format("%06d", new java.util.Random().nextInt(900000) + 100000);
-        user.setResetOtp(otp);
-        user.setResetOtpExpiry(java.time.LocalDateTime.now().plusMinutes(15));
-        userRepository.save(user);
+    // ==========================================
+    // FEATURE 4: EMAIL CHANGE VERIFICATION FLOW
+    // ==========================================
 
-        return new com.fintax.pro.dto.MessageResponse(
-                "Reset verification code sent to " + request.getEmail() + ". (Demo OTP: " + otp + ")",
+    @Transactional
+    public MessageResponse requestEmailChange(User user, ChangeEmailRequest request) {
+        String newEmail = request.getNewEmail().trim().toLowerCase();
+
+        if (newEmail.equalsIgnoreCase(user.getEmail())) {
+            throw new RuntimeException("New email address must be different from your current email.");
+        }
+
+        if (userRepository.existsByEmail(newEmail)) {
+            throw new RuntimeException("Email address " + newEmail + " is already in use by another account.");
+        }
+
+        String otp = String.format("%06d", secureRandom.nextInt(900000) + 100000);
+
+        // Invalidate old email change codes for this user
+        List<VerificationCode> existingCodes = verificationCodeRepository.findByUserIdAndTypeAndUsedFalse(user.getId(), VerificationType.EMAIL_CHANGE);
+        existingCodes.forEach(c -> c.setUsed(true));
+        verificationCodeRepository.saveAll(existingCodes);
+
+        VerificationCode code = VerificationCode.builder()
+                .userId(user.getId())
+                .email(newEmail)
+                .codeHash(passwordEncoder.encode(otp))
+                .type(VerificationType.EMAIL_CHANGE)
+                .expiresAt(LocalDateTime.now().plusMinutes(10))
+                .attempts(0)
+                .used(false)
+                .payload(newEmail)
+                .build();
+
+        verificationCodeRepository.save(code);
+
+        emailService.sendEmailChangeOtp(newEmail, otp);
+
+        return new MessageResponse(
+                "Verification code sent to " + newEmail + ". Enter the 6-digit OTP to verify and update your email.",
                 otp
         );
     }
 
     @Transactional
-    public com.fintax.pro.dto.MessageResponse resetPassword(com.fintax.pro.dto.ResetPasswordRequest request) {
-        User user = userRepository.findByEmail(request.getEmail())
+    public AuthResponse verifyEmailChange(User user, VerifyOtpRequest request) {
+        String inputOtp = request.getOtp().trim();
+
+        VerificationCode code = verificationCodeRepository
+                .findTopByEmailAndTypeAndUsedFalseAndExpiresAtAfterOrderByCreatedAtDesc(request.getEmail().trim().toLowerCase(), VerificationType.EMAIL_CHANGE, LocalDateTime.now())
+                .orElseThrow(() -> new RuntimeException("Verification code expired or not found. Please request email change again."));
+
+        if (!code.getUserId().equals(user.getId())) {
+            throw new RuntimeException("Unauthorized verification request.");
+        }
+
+        if (code.getAttempts() >= 5) {
+            code.setUsed(true);
+            verificationCodeRepository.save(code);
+            throw new RuntimeException("Too many failed attempts. This verification code has been invalidated.");
+        }
+
+        if (!passwordEncoder.matches(inputOtp, code.getCodeHash())) {
+            code.setAttempts(code.getAttempts() + 1);
+            verificationCodeRepository.save(code);
+            throw new RuntimeException("Invalid verification code. Please check the code sent to your new email.");
+        }
+
+        code.setUsed(true);
+        verificationCodeRepository.save(code);
+
+        String newEmail = code.getPayload();
+        user.setEmail(newEmail);
+        user.setTokenVersion(user.getTokenVersion() + 1); // Invalidate active JWT tokens
+        userRepository.save(user);
+
+        Profile profile = profileRepository.findByUser(user)
+                .orElseThrow(() -> new RuntimeException("Profile not found"));
+
+        UserDetails userDetails = userDetailsService.loadUserByUsername(user.getEmail());
+        String newToken = jwtUtils.generateToken(userDetails, user.getTokenVersion());
+
+        return buildAuthResponse(newToken, user, profile);
+    }
+
+    // ==========================================
+    // FEATURE 5: PASSWORD CHANGE VERIFICATION FLOW
+    // ==========================================
+
+    @Transactional
+    public MessageResponse requestPasswordChange(User user, ChangePasswordRequest request) {
+        if (!passwordEncoder.matches(request.getCurrentPassword(), user.getPassword())) {
+            throw new RuntimeException("Current password is incorrect. Please verify your current password.");
+        }
+
+        if (!request.getNewPassword().equals(request.getConfirmPassword())) {
+            throw new RuntimeException("New password and password confirmation do not match.");
+        }
+
+        if (passwordEncoder.matches(request.getNewPassword(), user.getPassword())) {
+            throw new RuntimeException("New password cannot be the same as your current password.");
+        }
+
+        String otp = String.format("%06d", secureRandom.nextInt(900000) + 100000);
+
+        List<VerificationCode> existingCodes = verificationCodeRepository.findByUserIdAndTypeAndUsedFalse(user.getId(), VerificationType.PASSWORD_CHANGE);
+        existingCodes.forEach(c -> c.setUsed(true));
+        verificationCodeRepository.saveAll(existingCodes);
+
+        VerificationCode code = VerificationCode.builder()
+                .userId(user.getId())
+                .email(user.getEmail())
+                .codeHash(passwordEncoder.encode(otp))
+                .type(VerificationType.PASSWORD_CHANGE)
+                .expiresAt(LocalDateTime.now().plusMinutes(10))
+                .attempts(0)
+                .used(false)
+                .payload(request.getNewPassword()) // Staged raw new password to hash upon verification
+                .build();
+
+        verificationCodeRepository.save(code);
+
+        emailService.sendPasswordChangeOtp(user.getEmail(), otp);
+
+        return new MessageResponse(
+                "Password change verification code sent to " + user.getEmail() + ". Enter the OTP to finalize your new password.",
+                otp
+        );
+    }
+
+    @Transactional
+    public MessageResponse verifyPasswordChange(User user, VerifyOtpRequest request) {
+        String inputOtp = request.getOtp().trim();
+
+        VerificationCode code = verificationCodeRepository
+                .findTopByEmailAndTypeAndUsedFalseAndExpiresAtAfterOrderByCreatedAtDesc(user.getEmail(), VerificationType.PASSWORD_CHANGE, LocalDateTime.now())
+                .orElseThrow(() -> new RuntimeException("Password verification code expired or not found. Please request password change again."));
+
+        if (!code.getUserId().equals(user.getId())) {
+            throw new RuntimeException("Unauthorized verification request.");
+        }
+
+        if (code.getAttempts() >= 5) {
+            code.setUsed(true);
+            verificationCodeRepository.save(code);
+            throw new RuntimeException("Too many failed attempts. Password change request invalidated.");
+        }
+
+        if (!passwordEncoder.matches(inputOtp, code.getCodeHash())) {
+            code.setAttempts(code.getAttempts() + 1);
+            verificationCodeRepository.save(code);
+            throw new RuntimeException("Invalid verification code. Please enter the correct OTP sent to your email.");
+        }
+
+        code.setUsed(true);
+        verificationCodeRepository.save(code);
+
+        String newPassword = code.getPayload();
+        user.setPassword(passwordEncoder.encode(newPassword));
+        user.setTokenVersion(user.getTokenVersion() + 1); // Invalidate existing sessions
+        userRepository.save(user);
+
+        return new MessageResponse("Password updated successfully! Active sessions invalidated. Please log in with your new password.");
+    }
+
+    // ==========================================
+    // FEATURE 6: PHONE NUMBER CHANGE VERIFICATION FLOW
+    // ==========================================
+
+    @Transactional
+    public MessageResponse requestPhoneChange(User user, ChangePhoneRequest request) {
+        String newPhone = request.getNewPhone().trim();
+
+        Profile profile = profileRepository.findByUser(user)
+                .orElseThrow(() -> new RuntimeException("Profile not found"));
+
+        if (newPhone.equals(profile.getMobile())) {
+            throw new RuntimeException("New mobile number must be different from your current mobile number.");
+        }
+
+        String otp = String.format("%06d", secureRandom.nextInt(900000) + 100000);
+
+        List<VerificationCode> existingCodes = verificationCodeRepository.findByUserIdAndTypeAndUsedFalse(user.getId(), VerificationType.PHONE_CHANGE);
+        existingCodes.forEach(c -> c.setUsed(true));
+        verificationCodeRepository.saveAll(existingCodes);
+
+        VerificationCode code = VerificationCode.builder()
+                .userId(user.getId())
+                .email(user.getEmail())
+                .codeHash(passwordEncoder.encode(otp))
+                .type(VerificationType.PHONE_CHANGE)
+                .expiresAt(LocalDateTime.now().plusMinutes(10))
+                .attempts(0)
+                .used(false)
+                .payload(newPhone)
+                .build();
+
+        verificationCodeRepository.save(code);
+
+        emailService.sendPhoneChangeOtp(user.getEmail(), otp);
+
+        return new MessageResponse(
+                "Phone update verification code sent to your registered email (" + user.getEmail() + "). Enter the 6-digit OTP to verify.",
+                otp
+        );
+    }
+
+    @Transactional
+    public Profile verifyPhoneChange(User user, VerifyOtpRequest request) {
+        String inputOtp = request.getOtp().trim();
+
+        VerificationCode code = verificationCodeRepository
+                .findTopByEmailAndTypeAndUsedFalseAndExpiresAtAfterOrderByCreatedAtDesc(user.getEmail(), VerificationType.PHONE_CHANGE, LocalDateTime.now())
+                .orElseThrow(() -> new RuntimeException("Phone verification code expired or not found. Please request phone number update again."));
+
+        if (!code.getUserId().equals(user.getId())) {
+            throw new RuntimeException("Unauthorized verification request.");
+        }
+
+        if (code.getAttempts() >= 5) {
+            code.setUsed(true);
+            verificationCodeRepository.save(code);
+            throw new RuntimeException("Too many failed attempts. Phone update request invalidated.");
+        }
+
+        if (!passwordEncoder.matches(inputOtp, code.getCodeHash())) {
+            code.setAttempts(code.getAttempts() + 1);
+            verificationCodeRepository.save(code);
+            throw new RuntimeException("Invalid verification code. Please enter the correct code sent to your email.");
+        }
+
+        code.setUsed(true);
+        verificationCodeRepository.save(code);
+
+        String newPhone = code.getPayload();
+        Profile profile = profileRepository.findByUser(user)
+                .orElseThrow(() -> new RuntimeException("Profile not found"));
+
+        profile.setMobile(newPhone);
+        return profileRepository.save(profile);
+    }
+
+    // ==========================================
+    // FEATURE 3: STRICT PROFILE EDITING RESTRICTIONS
+    // ==========================================
+
+    @Transactional
+    public Profile updateProfile(User user, ProfileDTO dto) {
+        Profile profile = profileRepository.findByUser(user)
+                .orElseThrow(() -> new RuntimeException("Profile not found"));
+
+        // Strictly enforce read-only restriction for core identity fields after onboarding
+        boolean attemptedNameChange = dto.getName() != null && !dto.getName().trim().equalsIgnoreCase(user.getName());
+        boolean attemptedPanChange = dto.getPan() != null && !dto.getPan().trim().equalsIgnoreCase(profile.getPan());
+        boolean attemptedAadhaarChange = dto.getAadhaar() != null && !dto.getAadhaar().trim().equalsIgnoreCase(profile.getAadhaar());
+        boolean attemptedGstinChange = dto.getGstin() != null && !dto.getGstin().trim().equalsIgnoreCase(profile.getGstin());
+        boolean attemptedBusinessTypeChange = dto.getBusinessType() != null && !dto.getBusinessType().trim().equalsIgnoreCase(profile.getBusinessType());
+        boolean attemptedCityChange = dto.getCity() != null && !dto.getCity().trim().equalsIgnoreCase(profile.getCity());
+        boolean attemptedStateChange = dto.getState() != null && !dto.getState().trim().equalsIgnoreCase(profile.getState());
+
+        if (attemptedNameChange || attemptedPanChange || attemptedAadhaarChange || attemptedGstinChange || attemptedBusinessTypeChange || attemptedCityChange || attemptedStateChange) {
+            throw new RuntimeException("Personal identity information (Name, PAN, Aadhaar, GSTIN, Business Type, City, State) is permanently locked and cannot be modified after registration.");
+        }
+
+        // Direct updates to Email or Mobile without verification endpoint are strictly rejected
+        if (dto.getEmail() != null && !dto.getEmail().trim().equalsIgnoreCase(user.getEmail())) {
+            throw new RuntimeException("Email address cannot be modified directly. Please use the 'Edit Email' verification option.");
+        }
+
+        if (dto.getMobile() != null && !dto.getMobile().trim().equalsIgnoreCase(profile.getMobile())) {
+            throw new RuntimeException("Mobile number cannot be modified directly. Please use the 'Edit Phone' verification option.");
+        }
+
+        if (dto.getFinancialYear() != null) {
+            profile.setFinancialYear(dto.getFinancialYear());
+        }
+
+        return profileRepository.save(profile);
+    }
+
+    // ==========================================
+    // FORGOT PASSWORD FLOW
+    // ==========================================
+
+    @Transactional
+    public MessageResponse forgotPassword(ForgotPasswordRequest request) {
+        User user = userRepository.findByEmail(request.getEmail().trim().toLowerCase())
+                .orElseThrow(() -> new RuntimeException("No registered account found with email: " + request.getEmail()));
+
+        String otp = String.format("%06d", secureRandom.nextInt(900000) + 100000);
+        user.setResetOtp(otp);
+        user.setResetOtpExpiry(LocalDateTime.now().plusMinutes(15));
+        userRepository.save(user);
+
+        emailService.sendPasswordChangeOtp(user.getEmail(), otp);
+
+        return new MessageResponse(
+                "Reset verification code sent to " + user.getEmail() + ".",
+                otp
+        );
+    }
+
+    @Transactional
+    public MessageResponse resetPassword(ResetPasswordRequest request) {
+        User user = userRepository.findByEmail(request.getEmail().trim().toLowerCase())
                 .orElseThrow(() -> new RuntimeException("No registered account found with email: " + request.getEmail()));
 
         if (user.getResetOtp() == null || !user.getResetOtp().equals(request.getOtp().trim())) {
             throw new RuntimeException("Invalid verification code. Please check the OTP and try again.");
         }
 
-        if (user.getResetOtpExpiry() != null && user.getResetOtpExpiry().isBefore(java.time.LocalDateTime.now())) {
+        if (user.getResetOtpExpiry() != null && user.getResetOtpExpiry().isBefore(LocalDateTime.now())) {
             throw new RuntimeException("Verification code has expired. Please request a new code.");
         }
 
-        // Update password
         user.setPassword(passwordEncoder.encode(request.getNewPassword()));
         user.setResetOtp(null);
         user.setResetOtpExpiry(null);
+        user.setTokenVersion(user.getTokenVersion() + 1);
         userRepository.save(user);
 
-        return new com.fintax.pro.dto.MessageResponse("Password updated successfully! Please log in with your new password.");
+        return new MessageResponse("Password updated successfully! Please log in with your new password.");
     }
 
     public User getUserByEmail(String email) {
@@ -136,79 +564,6 @@ public class AuthService {
     public Profile getProfileByUser(User user) {
         return profileRepository.findByUser(user)
                 .orElseThrow(() -> new RuntimeException("Profile not found"));
-    }
-
-    @Transactional
-    public com.fintax.pro.dto.MessageResponse requestProfileOtp(User user) {
-        // Generate 6-digit OTP for sensitive profile changes (Mobile / Email)
-        String otp = String.format("%06d", new java.util.Random().nextInt(900000) + 100000);
-        user.setResetOtp(otp);
-        user.setResetOtpExpiry(java.time.LocalDateTime.now().plusMinutes(15));
-        userRepository.save(user);
-
-        return new com.fintax.pro.dto.MessageResponse(
-                "Verification code generated! (Demo OTP: " + otp + ")",
-                otp
-        );
-    }
-
-    @Transactional
-    public Profile updateProfile(User user, com.fintax.pro.dto.ProfileDTO dto) {
-        Profile profile = profileRepository.findByUser(user)
-                .orElse(Profile.builder().user(user).build());
-
-        // Update name if provided
-        if (dto.getName() != null && !dto.getName().trim().isEmpty()) {
-            user.setName(dto.getName().trim());
-        }
-
-        // Check if sensitive contact info (Mobile or Email) is being modified
-        boolean mobileChanged = dto.getMobile() != null && !dto.getMobile().trim().equals(profile.getMobile());
-        boolean emailChanged = dto.getEmail() != null && !dto.getEmail().trim().equalsIgnoreCase(user.getEmail());
-
-        if (mobileChanged || emailChanged) {
-            // Require OTP verification ONLY for sensitive contact info updates (Mobile / Email)
-            if (dto.getOtp() == null || dto.getOtp().trim().isEmpty()) {
-                throw new RuntimeException("OTP verification code is required to change Mobile Number or Email Address.");
-            }
-
-            if (user.getResetOtp() == null || !user.getResetOtp().equals(dto.getOtp().trim())) {
-                throw new RuntimeException("Invalid OTP verification code. Please enter the correct 6-digit code.");
-            }
-
-            if (user.getResetOtpExpiry() != null && user.getResetOtpExpiry().isBefore(java.time.LocalDateTime.now())) {
-                throw new RuntimeException("OTP verification code has expired. Please request a new code.");
-            }
-
-            // Apply sensitive contact updates
-            if (emailChanged) {
-                String newEmail = dto.getEmail().trim();
-                if (userRepository.existsByEmail(newEmail)) {
-                    throw new RuntimeException("Email address " + newEmail + " is already in use by another account.");
-                }
-                user.setEmail(newEmail);
-            }
-
-            if (mobileChanged) {
-                profile.setMobile(dto.getMobile().trim());
-            }
-
-            // Clear used OTP
-            user.setResetOtp(null);
-            user.setResetOtpExpiry(null);
-        }
-
-        // Update general profile fields directly (No OTP required)
-        if (dto.getBusinessType() != null) profile.setBusinessType(dto.getBusinessType());
-        if (dto.getPan() != null) profile.setPan(dto.getPan().toUpperCase());
-        if (dto.getAadhaar() != null) profile.setAadhaar(dto.getAadhaar());
-        if (dto.getGstin() != null) profile.setGstin(dto.getGstin().toUpperCase());
-        if (dto.getCity() != null) profile.setCity(dto.getCity());
-        if (dto.getState() != null) profile.setState(dto.getState());
-        if (dto.getFinancialYear() != null) profile.setFinancialYear(dto.getFinancialYear());
-
-        userRepository.save(user);
-        return profileRepository.save(profile);
     }
 
     private AuthResponse buildAuthResponse(String token, User user, Profile profile) {

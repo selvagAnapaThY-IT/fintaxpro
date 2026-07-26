@@ -24,6 +24,9 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
     @Autowired
     private UserDetailsService userDetailsService;
 
+    @Autowired
+    private com.fintax.pro.repository.UserRepository userRepository;
+
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain)
             throws ServletException, IOException {
@@ -44,8 +47,11 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
         if (username != null && SecurityContextHolder.getContext().getAuthentication() == null) {
             UserDetails userDetails = this.userDetailsService.loadUserByUsername(username);
+            int currentTokenVersion = userRepository.findByEmail(username)
+                    .map(com.fintax.pro.entity.User::getTokenVersion)
+                    .orElse(0);
 
-            if (jwtUtils.validateToken(jwtToken, userDetails)) {
+            if (jwtUtils.validateToken(jwtToken, userDetails, currentTokenVersion)) {
                 UsernamePasswordAuthenticationToken usernamePasswordAuthenticationToken =
                         new UsernamePasswordAuthenticationToken(userDetails, null, userDetails.getAuthorities());
                 usernamePasswordAuthenticationToken

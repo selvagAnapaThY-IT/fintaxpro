@@ -11,8 +11,8 @@ import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.bind.annotation.*;
 
 @RestController
-@RequestMapping("/api/users")
-public class UserController {
+@RequestMapping("/api/profile")
+public class ProfileController {
 
     @Autowired
     private AuthService authService;
@@ -22,8 +22,8 @@ public class UserController {
         return authService.getUserByEmail(email);
     }
 
-    @GetMapping("/me")
-    public ResponseEntity<AuthResponse> getMe() {
+    @GetMapping
+    public ResponseEntity<AuthResponse> getProfile() {
         User user = getAuthenticatedUser();
         Profile profile = authService.getProfileByUser(user);
 
@@ -49,7 +49,7 @@ public class UserController {
         return ResponseEntity.ok(response);
     }
 
-    @PutMapping("/profile")
+    @PutMapping
     public ResponseEntity<ProfileDTO> updateProfile(@Valid @RequestBody ProfileDTO dto) {
         User user = getAuthenticatedUser();
         Profile updated = authService.updateProfile(user, dto);
@@ -70,45 +70,42 @@ public class UserController {
         return ResponseEntity.ok(response);
     }
 
-    // Email Change Flow
-    @PostMapping("/profile/change-email/request")
+    @PostMapping("/change-email/request")
     public ResponseEntity<MessageResponse> requestEmailChange(@Valid @RequestBody ChangeEmailRequest request) {
         User user = getAuthenticatedUser();
         MessageResponse response = authService.requestEmailChange(user, request);
         return ResponseEntity.ok(response);
     }
 
-    @PostMapping("/profile/change-email/verify")
+    @PostMapping("/change-email/verify")
     public ResponseEntity<AuthResponse> verifyEmailChange(@Valid @RequestBody VerifyOtpRequest request) {
         User user = getAuthenticatedUser();
         AuthResponse response = authService.verifyEmailChange(user, request);
         return ResponseEntity.ok(response);
     }
 
-    // Password Change Flow
-    @PostMapping("/profile/change-password/request")
+    @PostMapping("/change-password/request")
     public ResponseEntity<MessageResponse> requestPasswordChange(@Valid @RequestBody ChangePasswordRequest request) {
         User user = getAuthenticatedUser();
         MessageResponse response = authService.requestPasswordChange(user, request);
         return ResponseEntity.ok(response);
     }
 
-    @PostMapping("/profile/change-password/verify")
+    @PostMapping("/change-password/verify")
     public ResponseEntity<MessageResponse> verifyPasswordChange(@Valid @RequestBody VerifyOtpRequest request) {
         User user = getAuthenticatedUser();
         MessageResponse response = authService.verifyPasswordChange(user, request);
         return ResponseEntity.ok(response);
     }
 
-    // Phone Change Flow
-    @PostMapping("/profile/change-phone/request")
+    @PostMapping("/change-phone/request")
     public ResponseEntity<MessageResponse> requestPhoneChange(@Valid @RequestBody ChangePhoneRequest request) {
         User user = getAuthenticatedUser();
         MessageResponse response = authService.requestPhoneChange(user, request);
         return ResponseEntity.ok(response);
     }
 
-    @PostMapping("/profile/change-phone/verify")
+    @PostMapping("/change-phone/verify")
     public ResponseEntity<ProfileDTO> verifyPhoneChange(@Valid @RequestBody VerifyOtpRequest request) {
         User user = getAuthenticatedUser();
         Profile updated = authService.verifyPhoneChange(user, request);
