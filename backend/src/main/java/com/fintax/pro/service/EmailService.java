@@ -1,33 +1,60 @@
 package com.fintax.pro.service;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.mail.javamail.JavaMailSender;
+import org.springframework.mail.javamail.JavaMailSenderImpl;
 import org.springframework.mail.javamail.MimeMessageHelper;
 import org.springframework.stereotype.Service;
 
 import jakarta.mail.internet.MimeMessage;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
+import java.time.Duration;
+import java.util.*;
+import java.util.concurrent.CompletableFuture;
 
 @Service
 public class EmailService {
 
     private static final Logger logger = LoggerFactory.getLogger(EmailService.class);
 
-    private final JavaMailSender mailSender;
+    private final JavaMailSender defaultMailSender;
+    private final ObjectMapper objectMapper = new ObjectMapper();
+
+    @Value("${resend.api.key:}")
+    private String resendApiKey;
+
+    @Value("${resend.from.email:FinTax Pro <onboarding@resend.dev>}")
+    private String resendFromEmail;
 
     @Value("${spring.mail.username:}")
     private String fromEmail;
 
-    @Value("${spring.mail.host:}")
+    @Value("${spring.mail.host:smtp.gmail.com}")
     private String mailHost;
 
-    public EmailService(JavaMailSender mailSender) {
-        this.mailSender = mailSender;
+    @Value("${spring.mail.port:587}")
+    private int mailPort;
+
+    @Value("${spring.mail.password:}")
+    private String mailPassword;
+
+    public EmailService(JavaMailSender defaultMailSender) {
+        this.defaultMailSender = defaultMailSender;
     }
 
     public boolean isLiveEmailConfigured() {
-        return mailHost != null && !mailHost.trim().isEmpty() && !"localhost".equalsIgnoreCase(mailHost.trim());
+        boolean hasResendKey = resendApiKey != null && !resendApiKey.trim().isEmpty();
+        boolean hasSmtpCreds = mailHost != null && !mailHost.trim().isEmpty() 
+                && fromEmail != null && !fromEmail.trim().isEmpty()
+                && mailPassword != null && !mailPassword.trim().isEmpty();
+        return hasResendKey || hasSmtpCreds;
     }
 
     public void sendSignupOtp(String recipientEmail, String otp) {
@@ -39,7 +66,7 @@ public class EmailService {
                 "Signup Verification Code",
                 "This code will expire in 10 minutes. If you did not request this code, please ignore this email."
         );
-        java.util.concurrent.CompletableFuture.runAsync(() -> sendEmail(recipientEmail, subject, htmlContent, otp, "SIGNUP_VERIFICATION"));
+        CompletableFuture.runAsync(() -> sendEmail(recipientEmail, subject, htmlContent, otp, "SIGNUP_VERIFICATION"));
     }
 
     public void sendEmailChangeOtp(String recipientEmail, String otp) {
@@ -51,7 +78,7 @@ public class EmailService {
                 "Email Change Code",
                 "This code expires in 10 minutes. If you did not initiate this change, please contact support immediately and secure your account."
         );
-        java.util.concurrent.CompletableFuture.runAsync(() -> sendEmail(recipientEmail, subject, htmlContent, otp, "EMAIL_CHANGE_VERIFICATION"));
+        CompletableFuture.runAsync(() -> sendEmail(recipientEmail, subject, htmlContent, otp, "EMAIL_CHANGE_VERIFICATION"));
     }
 
     public void sendPasswordChangeOtp(String recipientEmail, String otp) {
@@ -63,7 +90,7 @@ public class EmailService {
                 "Password Change Code",
                 "This code expires in 10 minutes. NEVER share this OTP with anyone, including FinTax Pro staff."
         );
-        java.util.concurrent.CompletableFuture.runAsync(() -> sendEmail(recipientEmail, subject, htmlContent, otp, "PASSWORD_CHANGE_VERIFICATION"));
+        CompletableFuture.runAsync(() -> sendEmail(recipientEmail, subject, htmlContent, otp, "PASSWORD_CHANGE_VERIFICATION"));
     }
 
     public void sendPhoneChangeOtp(String recipientEmail, String otp) {
@@ -75,31 +102,111 @@ public class EmailService {
                 "Phone Change Code",
                 "This code expires in 10 minutes. If you did not request this update, please change your password immediately."
         );
-        java.util.concurrent.CompletableFuture.runAsync(() -> sendEmail(recipientEmail, subject, htmlContent, otp, "PHONE_CHANGE_VERIFICATION"));
+        CompletableFuture.runAsync(() -> sendEmail(recipientEmail, subject, htmlContent, otp, "PHONE_CHANGE_VERIFICATION"));
     }
 
     private void sendEmail(String to, String subject, String htmlContent, String otp, String actionType) {
         logger.info("[EMAIL SERVICE] [{}] Target: {} | OTP Code: {}", actionType, to, otp);
 
-        if (mailHost == null || mailHost.trim().isEmpty() || "localhost".equalsIgnoreCase(mailHost.trim())) {
-            logger.warn("[EMAIL SERVICE] SMTP host is not configured (EMAIL_HOST is empty). Code logged to console: OTP={}", otp);
+        // 1. Primary Attempt: High-Reliability Resend HTTPS API
+        if (sendViaResendHttpApi(to, subject, htmlContent, otp, actionType)) {
             return;
         }
 
+        // 2. Secondary Attempt: Spring SMTP
+        if (sendViaSmtp(to, subject, htmlContent, otp, actionType)) {
+            return;
+        }
+
+        // 3. Fallback: Console Demo Logging
+        logger.warn("[EMAIL SERVICE] All live email delivery options unavailable. Running in Demo Mode: OTP={}", otp);
+    }
+
+    private boolean sendViaResendHttpApi(String to, String subject, String htmlContent, String otp, String actionType) {
+        String apiKey = (resendApiKey != null) ? resendApiKey.trim() : "";
+        if (apiKey.isEmpty()) {
+            return false;
+        }
+
         try {
-            MimeMessage message = mailSender.createMimeMessage();
+            HttpClient client = HttpClient.newBuilder()
+                    .connectTimeout(Duration.ofSeconds(10))
+                    .build();
+
+            String fromSender = (resendFromEmail != null && !resendFromEmail.trim().isEmpty())
+                    ? resendFromEmail.trim()
+                    : "FinTax Pro <onboarding@resend.dev>";
+
+            Map<String, Object> bodyMap = new HashMap<>();
+            bodyMap.put("from", fromSender);
+            bodyMap.put("to", List.of(to.trim()));
+            bodyMap.put("subject", subject);
+            bodyMap.put("html", htmlContent);
+
+            String jsonPayload = objectMapper.writeValueAsString(bodyMap);
+
+            HttpRequest httpRequest = HttpRequest.newBuilder()
+                    .uri(URI.create("https://api.resend.com/emails"))
+                    .header("Authorization", "Bearer " + apiKey)
+                    .header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString(jsonPayload, StandardCharsets.UTF_8))
+                    .timeout(Duration.ofSeconds(10))
+                    .build();
+
+            HttpResponse<String> response = client.send(httpRequest, HttpResponse.BodyHandlers.ofString());
+
+            if (response.statusCode() >= 200 && response.statusCode() < 300) {
+                logger.info("[RESEND API] Live email successfully dispatched to {} via Resend HTTPS API! Response: {}", to, response.body());
+                return true;
+            } else {
+                logger.warn("[RESEND API] Resend API returned error status {}: {}", response.statusCode(), response.body());
+                return false;
+            }
+        } catch (Exception e) {
+            logger.error("[RESEND API] Error calling Resend HTTPS API: {}", e.getMessage());
+            return false;
+        }
+    }
+
+    private boolean sendViaSmtp(String to, String subject, String htmlContent, String otp, String actionType) {
+        String cleanHost = (mailHost != null && !mailHost.trim().isEmpty()) ? mailHost.trim() : "smtp.gmail.com";
+        String cleanUser = (fromEmail != null) ? fromEmail.trim() : "";
+        String cleanPass = (mailPassword != null) ? mailPassword.replaceAll("\\s+", "") : "";
+
+        if (cleanUser.isEmpty() || cleanPass.isEmpty()) {
+            return false;
+        }
+
+        try {
+            JavaMailSenderImpl customSender = new JavaMailSenderImpl();
+            customSender.setHost(cleanHost);
+            customSender.setPort(mailPort > 0 ? mailPort : 587);
+            customSender.setUsername(cleanUser);
+            customSender.setPassword(cleanPass);
+
+            Properties props = customSender.getJavaMailProperties();
+            props.put("mail.smtp.auth", "true");
+            props.put("mail.smtp.starttls.enable", "true");
+            props.put("mail.smtp.starttls.required", "true");
+            props.put("mail.smtp.ssl.trust", "*");
+            props.put("mail.smtp.connectiontimeout", "8000");
+            props.put("mail.smtp.timeout", "8000");
+            props.put("mail.smtp.writetimeout", "8000");
+
+            MimeMessage message = customSender.createMimeMessage();
             MimeMessageHelper helper = new MimeMessageHelper(message, true, "UTF-8");
             
-            String sender = (fromEmail != null && !fromEmail.trim().isEmpty()) ? fromEmail.trim() : "no-reply@fintaxpro.in";
-            helper.setFrom(sender, "FinTax Pro");
+            helper.setFrom(cleanUser, "FinTax Pro");
             helper.setTo(to.trim());
             helper.setSubject(subject);
             helper.setText(htmlContent, true);
 
-            mailSender.send(message);
-            logger.info("[EMAIL SERVICE] Live SMTP email successfully sent to {}", to);
+            customSender.send(message);
+            logger.info("[EMAIL SERVICE] Live SMTP email successfully sent to {} via {}", to, cleanUser);
+            return true;
         } catch (Exception e) {
-            logger.error("[EMAIL SERVICE] Failed to dispatch live SMTP email to {}: {}", to, e.getMessage(), e);
+            logger.error("[EMAIL SERVICE] Failed to dispatch SMTP email to {}: {}", to, e.getMessage());
+            return false;
         }
     }
 
